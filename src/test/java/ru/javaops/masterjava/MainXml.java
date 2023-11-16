@@ -11,6 +11,7 @@ import ru.javaops.masterjava.xml.schema.User;
 import ru.javaops.masterjava.xml.util.JaxbParser;
 import ru.javaops.masterjava.xml.util.Schemas;
 import ru.javaops.masterjava.xml.util.StaxStreamProcessor;
+import ru.javaops.masterjava.xml.util.XsltProcessor;
 
 import javax.xml.stream.events.XMLEvent;
 import java.io.InputStream;
@@ -49,6 +50,12 @@ public class MainXml {
         System.out.println();
         users = processByStax(projectName, payloadUrl);
         users.forEach(System.out::println);
+
+        System.out.println();
+        html = transform(projectName, payloadUrl);
+        try (Writer writer = Files.newBufferedWriter(Paths.get("out/groups.html"))) {
+            writer.write(html);
+        }
     }
 
     private static Set<User> parseByJaxb(String projectName, URL payloadUrl) throws Exception {
@@ -80,16 +87,12 @@ public class MainXml {
 
             // Projects loop
             projects:
-            while (processor.doUntil(XMLEvent.START_ELEMENT, "Project")) {
+            while (processor.startElement("Project", "Projects")) {
                 if (projectName.equals(processor.getAttribute("name"))) {
-                    // Groups loop
-                    String element;
-                    while ((element = processor.doUntilAny(XMLEvent.START_ELEMENT, "Project", "Group", "Users")) != null) {
-                        if (!element.equals("Group")) {
-                            break projects;
-                        }
+                    while (processor.startElement("Group", "Project")) {
                         groupNames.add(processor.getAttribute("name"));
                     }
+                    break;
                 }
             }
             if (groupNames.isEmpty()) {
@@ -99,12 +102,11 @@ public class MainXml {
             // Users loop
             Set<User> users = new TreeSet<>(USER_COMPARATOR);
 
+            JaxbParser parser = new JaxbParser(User.class);
             while (processor.doUntil(XMLEvent.START_ELEMENT, "User")) {
                 String groupRefs = processor.getAttribute("groupRefs");
                 if (!Collections.disjoint(groupNames, Splitter.on(' ').splitToList(nullToEmpty(groupRefs)))) {
-                    User user = new User();
-                    user.setEmail(processor.getAttribute("email"));
-                    user.setValue(processor.getText());
+                    User user = parser.unmarshal(processor.getReader(), User.class);
                     users.add(user);
                 }
             }
@@ -125,5 +127,14 @@ public class MainXml {
                 head().with(title(projectName + " users")),
                 body().with(h1(projectName + " users"), table)
         ).render();
+    }
+
+    private static String transform(String projectName, URL payloadUrl) throws Exception {
+        URL xsl = Resources.getResource("groups.xsl");
+        try (InputStream xmlStream = payloadUrl.openStream(); InputStream xslStream = xsl.openStream()) {
+            XsltProcessor processor = new XsltProcessor(xslStream);
+            processor.setParameter("projectName", projectName);
+            return processor.transform(xmlStream);
+        }
     }
 }
